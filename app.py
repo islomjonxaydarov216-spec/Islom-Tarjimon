@@ -1,5 +1,8 @@
+
 import streamlit as st
 import requests
+import html
+import time
 
 st.set_page_config(
     page_title="ISLOM TARJIMON",
@@ -8,7 +11,7 @@ st.set_page_config(
 )
 
 st.title("📚 ISLOM TARJIMON")
-st.write("Matnni 6 ta tilga tarjima qilish")
+st.caption("Matnlarni 15 ta tilga tarjima qilish")
 
 TILLAR = {
     "O‘zbek": "uz",
@@ -16,39 +19,163 @@ TILLAR = {
     "Rus": "ru",
     "Turk": "tr",
     "Arab": "ar",
-    "Nemis": "de"
+    "Nemis": "de",
+    "Fransuz": "fr",
+    "Ispan": "es",
+    "Xitoy": "zh-CN",
+    "Koreys": "ko",
+    "Yapon": "ja",
+    "Italyan": "it",
+    "Qozoq": "kk",
+    "Qirg‘iz": "ky",
+    "Tojik": "tg"
 }
 
-manba = st.selectbox("Matn qaysi tilda?", list(TILLAR.keys()), index=0)
-maqsad = st.selectbox("Qaysi tilga tarjima qilinsin?", list(TILLAR.keys()), index=1)
+def matnni_bol(matn, limit=450):
+    sozlar = matn.split()
+    bolaklar = []
+    joriy = ""
 
-matn = st.text_area("Tarjima qilinadigan matnni kiriting:", height=200)
+    for soz in sozlar:
+        if len(soz) > limit:
+            if joriy:
+                bolaklar.append(joriy)
+                joriy = ""
+            for i in range(0, len(soz), limit):
+                bolaklar.append(soz[i:i + limit])
+        elif len(joriy) + len(soz) + 1 <= limit:
+            joriy = (joriy + " " + soz).strip()
+        else:
+            bolaklar.append(joriy)
+            joriy = soz
 
-if st.button("🌐 TARJIMA QILISH", type="primary"):
+    if joriy:
+        bolaklar.append(joriy)
+
+    return bolaklar
+
+def tarjima_qil(matn, manba_kod, maqsad_kod):
+    bolaklar = matnni_bol(matn)
+    natijalar = []
+
+    sessiya = requests.Session()
+    sessiya.headers.update({
+        "User-Agent": "ISLOM-TARJIMON/1.0"
+    })
+
+    for i, bolak in enumerate(bolaklar):
+        muvaffaqiyat = False
+
+        for urinish in range(3):
+            try:
+                javob = sessiya.get(
+                    "https://api.mymemory.translated.net/get",
+                    params={
+                        "q": bolak,
+                        "langpair": f"{manba_kod}|{maqsad_kod}"
+                    },
+                    timeout=25
+                )
+
+                if javob.status_code == 429:
+                    time.sleep(2 + urinish * 3)
+                    continue
+
+                javob.raise_for_status()
+                data = javob.json()
+
+                if data.get("responseStatus") not in (None, 200, "200"):
+                    xabar = data.get("responseDetails", "Tarjima xizmati xatoligi")
+                    raise RuntimeError(str(xabar))
+
+                tarjima = data.get("responseData", {}).get(
+                    "translatedText", ""
+                )
+
+                if not tarjima:
+                    raise RuntimeError("Tarjima natijasi bo‘sh.")
+
+                natijalar.append(html.unescape(tarjima))
+                muvaffaqiyat = True
+                break
+
+            except requests.RequestException:
+                if urinish < 2:
+                    time.sleep(2 + urinish * 2)
+            except (ValueError, TypeError):
+                if urinish < 2:
+                    time.sleep(2)
+
+        if not muvaffaqiyat:
+            raise RuntimeError(
+                f"{i + 1}-bo‘lak tarjima qilinmadi. "
+                "Birozdan keyin qayta urinib ko‘ring."
+            )
+
+        if i < len(bolaklar) - 1:
+            time.sleep(1)
+
+    return "\n".join(natijalar)
+
+col1, col2 = st.columns(2)
+
+with col1:
+    manba = st.selectbox(
+        "Matn qaysi tilda?",
+        list(TILLAR.keys()),
+        index=0
+    )
+
+with col2:
+    maqsad = st.selectbox(
+        "Qaysi tilga tarjima qilinsin?",
+        list(TILLAR.keys()),
+        index=1
+    )
+
+matn = st.text_area(
+    "Tarjima qilinadigan matn:",
+    height=230,
+    placeholder="Matningizni shu yerga yozing yoki joylashtiring..."
+)
+
+if st.button("🌐 TARJIMA QILISH", type="primary", use_container_width=True):
     if not matn.strip():
-        st.warning("Iltimos, avval matn kiriting.")
+        st.warning("Avval tarjima qilinadigan matnni kiriting.")
     elif manba == maqsad:
-        st.warning("Iltimos, boshqa tarjima tilini tanlang.")
+        st.warning("Manba tili va tarjima tili har xil bo‘lishi kerak.")
     else:
         try:
-            javob = requests.get(
-                "https://api.mymemory.translated.net/get",
-                params={
-                    "q": matn[:500],
-                    "langpair": f"{TILLAR[manba]}|{TILLAR[maqsad]}"
-                },
-                timeout=20
-            )
-            javob.raise_for_status()
-            natija = javob.json()
-            tarjima = natija.get("responseData", {}).get("translatedText", "")
+            with st.spinner("Matn tarjima qilinmoqda. Kuting..."):
+                natija = tarjima_qil(
+                    matn.strip(),
+                    TILLAR[manba],
+                    TILLAR[maqsad]
+                )
 
-            if tarjima:
-                st.subheader("Tarjima natijasi")
-                st.text_area("Tayyor tarjima:", value=tarjima, height=200)
-            else:
-                st.error("Tarjima topilmadi. Birozdan keyin qayta urinib ko‘ring.")
-        except requests.RequestException:
-            st.error("Internet yoki tarjima xizmati bilan bog‘lanishda xatolik.")
-        except (ValueError, TypeError):
-            st.error("Tarjima xizmatidan noto‘g‘ri javob keldi.")
+            st.success("Tarjima tayyor!")
+            st.text_area(
+                "Tarjima natijasi:",
+                value=natija,
+                height=250
+            )
+            st.download_button(
+                "⬇️ Tarjimani TXT fayl qilib saqlash",
+                data=natija,
+                file_name="tarjima.txt",
+                mime="text/plain"
+            )
+
+        except RuntimeError as e:
+            st.error(str(e))
+        except Exception:
+            st.error(
+                "Tarjima vaqtida xatolik yuz berdi. "
+                "Internetni tekshirib, qayta urinib ko‘ring."
+            )
+
+st.divider()
+st.caption(
+    "ISLOM TARJIMON • Bepul tarjima xizmati internet talab qiladi. "
+    "Xizmatda cheklovlar bo‘lishi mumkin."
+)
